@@ -1,0 +1,120 @@
+apiVersion: argoproj.io/v1alpha1
+kind: Workflow
+metadata:
+  generateName: dynamic-checks-
+spec:
+  entrypoint: cron-sequence
+  templates:
+  - name: cron-sequence
+    steps:
+    # Group A: Sequential Execution with Polling
+    - - name: cron1
+        template: call-and-check
+        arguments:
+          parameters:
+          - name: start-endpoint
+            value: "http://cron1-service/api/start"
+          - name: status-endpoint
+            value: "http://cron1-service/api/status"
+    - - name: cron2
+        template: call-and-check
+        arguments:
+          parameters:
+          - name: start-endpoint
+            value: "http://cron2-service/api/start"
+          - name: status-endpoint
+            value: "http://cron2-service/api/status"
+        when: "{{steps.cron1.status}} == Succeeded"
+    - - name: cron3
+        template: call-and-check
+        arguments:
+          parameters:
+          - name: start-endpoint
+            value: "http://cron3-service/api/start"
+          - name: status-endpoint
+            value: "http://cron3-service/api/status"
+        when: "{{steps.cron2.status}} == Succeeded"
+
+    # Helper Cron
+    - - name: helper-cron
+        template: call-and-check
+        arguments:
+          parameters:
+          - name: start-endpoint
+            value: "http://helper-service/api/start"
+          - name: status-endpoint
+            value: "http://helper-service/api/status"
+        when: "{{steps.cron3.status}} == Succeeded"
+
+    # Group B: Independent Execution
+    - - name: cron4
+        template: call-and-check
+        arguments:
+          parameters:
+          - name: start-endpoint
+            value: "http://cron4-service/api/start"
+          - name: status-endpoint
+            value: "http://cron4-service/api/status"
+        when: "{{steps.helper-cron.status}} == Succeeded"
+      - name: cron5
+        template: call-and-check
+        arguments:
+          parameters:
+          - name: start-endpoint
+            value: "http://cron5-service/api/start"
+          - name: status-endpoint
+            value: "http://cron5-service/api/status"
+        when: "{{steps.helper-cron.status}} == Succeeded"
+
+  # Template to Start and Check Cron Jobs
+  - name: call-and-check
+    inputs:
+      parameters:
+      - name: start-endpoint
+      - name: status-endpoint
+    steps:
+    - - name: start-job
+        template: call-cron
+        arguments:
+          parameters:
+          - name: endpoint
+            value: "{{inputs.parameters.start-endpoint}}"
+    - - name: check-job
+        template: check-status
+        arguments:
+          parameters:
+          - name: endpoint
+            value: "{{inputs.parameters.status-endpoint}}"
+
+  # Template to Trigger a Job
+  - name: call-cron
+    inputs:
+      parameters:
+      - name: endpoint
+    container:
+      image: curlimages/curl:latest
+      command: [sh, -c]
+      args: ["curl -X POST {{inputs.parameters.endpoint}}"]
+
+  # Template to Check Job Status
+  - name: check-status
+    inputs:
+      parameters:
+      - name: endpoint
+    container:
+      image: curlimages/curl:latest
+      command: [sh, -c]
+      args:
+        - |
+          while true; do
+            status=$(curl -s {{inputs.parameters.endpoint}})
+            if [ "$status" = "completed" ]; then
+              echo "Job completed."
+              exit 0
+            elif [ "$status" = "failed" ]; then
+              echo "Job failed."
+              exit 1
+            fi
+            echo "Waiting for job to complete..."
+            sleep 10
+          done

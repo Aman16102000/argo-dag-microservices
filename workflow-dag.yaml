@@ -1,0 +1,92 @@
+apiVersion: argoproj.io/v1alpha1
+kind: Workflow
+metadata:
+  generateName: dag-microservices-
+spec:
+  entrypoint: microservices-dag
+  serviceAccountName: argo-workflow-sa # Use the dedicated ServiceAccount for security
+  templates:
+  - name: microservices-dag
+    dag:
+      tasks:
+      # Task 1: Microservice A
+      - name: microservice-a
+        template: call-and-check
+        arguments:
+          parameters:
+          - name: start-endpoint
+            value: "http://microservice-a/start"
+          - name: status-endpoint
+            value: "http://microservice-a/status"
+      # Task 2: Microservice B (depends on Microservice A)
+      - name: microservice-b
+        dependencies: [microservice-a]
+        template: call-and-check
+        arguments:
+          parameters:
+          - name: start-endpoint
+            value: "http://microservice-b/start"
+          - name: status-endpoint
+            value: "http://microservice-b/status"
+
+  # Template for Starting and Checking Microservices
+  - name: call-and-check
+    inputs:
+      parameters:
+      - name: start-endpoint
+      - name: status-endpoint
+    steps:
+    - - name: start-job
+        template: call-microservice
+        arguments:
+          parameters:
+          - name: endpoint
+            value: "{{inputs.parameters.start-endpoint}}"
+    - - name: check-job
+        template: check-status
+        arguments:
+          parameters:
+          - name: endpoint
+            value: "{{inputs.parameters.status-endpoint}}"
+
+  # Template to Start a Job
+  - name: call-microservice
+    inputs:
+      parameters:
+      - name: endpoint
+    container:
+      image: curlimages/curl:latest
+      command: [sh, -c]
+      args: ["curl -X POST {{inputs.parameters.endpoint}}"]
+
+  # Template to Check Job Status
+  - name: check-status
+    inputs:
+      parameters:
+      - name: endpoint
+    container:
+      image: alpine:latest
+      command: [sh, -c]
+      args:
+        - |
+          apk add --no-cache jq curl
+          while true; do
+            # Fetch the response from the status endpoint
+            response=$(curl -s {{inputs.parameters.endpoint}})
+            echo "Response from status endpoint: $response"
+
+            # Parse the 'status' field from the JSON response
+            status=$(echo $response | jq -r '.status')
+
+            # Check the status
+            if [ "$status" = "completed" ]; then
+              echo "Job completed successfully."
+              exit 0
+            elif [ "$status" = "failed" ]; then
+              echo "Job failed."
+              exit 1
+            fi
+
+            echo "Waiting for job to complete..."
+            sleep 5
+          done

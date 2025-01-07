@@ -1,0 +1,7 @@
+FROM node:14-alpine
+WORKDIR /usr/src/app/microservice-b
+COPY microservice-b/package*.json ./
+RUN npm install
+COPY microservice-b/ .
+EXPOSE 3002
+CMD ["node", "microservice-b.js"]
